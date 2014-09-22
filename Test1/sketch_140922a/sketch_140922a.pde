@@ -278,13 +278,87 @@ class BendConstraint extends Constraint {
   }
 }
 
-class PObject {
+// C(p_1...p_n) = (sigma (p_i x p_i+1) / 2) - k_p A0
+// C(p_1...p_n) = A - k_p A0
+class Pressure2DConstraint extends Constraint {
+  public float A0;
+  public float kp; // k_pressure
+  public Pressure2DConstraint(int[] indices, Particle[] points) {
+    super(indices);
+    A0 = _area(points);
+    kp = 1.0f;
+    println("A0=" + A0);
+  }
+  public float eval(int interations) {
+    
+    float A = _area(positions);
+    float c = A - kp * A0;
+    
+    if(!isEquality && c >= 1.0f) {
+      return c;
+    }
+    
+    int size = positions.size;
+    if(size <= 2) {
+      return c;
+    }
+    
+    PVector[] npc = new PVector[size]; // nablas
+    float[] ws = new float[size];
+    float denom = 0;
+    Point p0 = positions[size-1].p1;
+    for(int i = 0; i < size; ++ i) {
+      Point p1 = positions[i].p1;
+      Point p2 = positions[(i+1)%size].p1;
+      npc[i] = new PVector(p2.y - p0.y, -p2.x + p0.x);
+      p0 = p1;
+      //
+      float mass = positions[i].mass;
+      ws[i] = mass <= 0 ? 0 : 1.0f / mass;
+      denom += ws[i] * npc[i].magSq();
+    }
+    
+    float s = c / denom;
+    
+    float dt = 1.0f / 30; // TODO
+    float t = _k(iterations) * dt;
+
+    // delta p
+    for(int i = 0; i < size; ++ i) {
+      float dx = -s * ws[i] * npc[i].x;
+      float dy = -s * ws[i] * npc[i].y;
+      Point p = positions[i].p1;
+      p.set(p.x + t * dx, p.y + t * dy);
+    }
+    
+    return c;
+  }
+  float _area(Particle[] points) {
+    int size = points.length;
+    if(size <= 2) {
+      return 0;
+    }
+    
+    float area = 0;
+    
+    Point p0 = points[size-1].p1;
+    for(int i = 0; i < size; ++ i) {
+      Point p1 = points[i].p1;
+      area += (p0.x * p1.y - p0.y * p1.x);
+      p0 = p1;
+    }
+    
+    return abs(area / 2);
+  }
+}
+
+class RigidBody {
   
 }
 
-class PBox extends PObject {
+class BoxBody extends RigidBody {
   public Rectangle bounds;
-  public PBox(float x, float y, float width, float height) {
+  public BoxBody(float x, float y, float width, float height) {
     bounds = new Rectangle(x, y, width, height);
   }
 }
@@ -295,9 +369,9 @@ boolean _isPaused = false;
 ArrayList<Particle> _particles;
 ArrayList<Point> _forces; // external force
 ArrayList<Constraint> _constraints;
-ArrayList<PObject> _objects;
+ArrayList<RigidBody> _bodies;
 int _solverIterations = 4;
-int _updateIterations = 1;
+int _updateIterations = 2;
 
 void setup() {
   size(500, 500);
@@ -326,36 +400,47 @@ void setup() {
 //  
 //  _forces.add(new Point(10, 0));
 
-  float w = 200, h = 200;
-  int segX = 10, segY = 10;
-  float tx = (width - w) / 2, ty = (height - h) / 2;
-  for(int iy = 0; iy <= segY; ++ iy) {
-    float y = ty + iy * h / segY;
-    for(int ix = 0; ix <= segX; ++ ix) {
-      float x = tx + ix * w / segX;
-      Particle p = new Particle(x, y, 0, 0);
-      p.mass = iy == 0 ? 0 : 1.0f;
-      _particles.add(p);
-    }
+  float radius = 100;
+  int seg = 20;
+  float tx = width / 2, ty = height / 2; 
+  for(int i = 0; i < seg; ++ i) {
+    float a = 2 * PI * i / (float) seg;
+    float x = tx + cos(a) * radius;
+    float y = ty + sin(a) * radius;
+    Particle p = new Particle(x, y, 0, 0);
+    p.mass = 1.0f;
+    _particles.add(p);
+  } 
+  
+  int[] indices = new int[seg];
+  Particle[] particles = new Particle[seg];
+  float dr = 2 * PI * radius / (float) seg;
+  for(int i = 0, j = seg - 1; i < seg; ++ i) {
+    // distance
+    _constraints.add(new DistanceConstraint(j, i, dr));
+    j = i;
+    // pressure
+    indices[i] = i;
+    particles[i] = _particles.get(i);
   }
   
-  int step = segX + 1;
-  float dw = w / segX, dh = h / segY, dr = sqrt(dw * dw + dh * dh);
-  for(int iy = 0; iy < segY; ++ iy) {  
-    for(int ix = 0; ix < segX; ++ ix) {
-      int i = iy * step + ix;
-      int i0 = i, i1 = i + 1, i2 = i + step, i3 = i2 + 1;
-      _constraints.add(new DistanceConstraint(i3, i2, dw));
-      _constraints.add(new DistanceConstraint(i2, i0, dh));
-      _constraints.add(new DistanceConstraint(i0, i3, dr));
-      _constraints.add(new DistanceConstraint(i3, i0, dr));
-      _constraints.add(new DistanceConstraint(i0, i1, dw));
-      _constraints.add(new DistanceConstraint(i1, i3, dh));
-      //
-      _constraints.add(new DistanceConstraint(i2, i1, dr));      
-    }
-  }
- 
+  _constraints.add(new Pressure2DConstraint(indices, particles));
+
+//  int step = segX + 1;
+//  float dw = w / segX, dh = h / segY, dr = sqrt(dw * dw + dh * dh);
+//  for(int iy = 0; iy < segY; ++ iy) {  
+//    for(int ix = 0; ix < segX; ++ ix) {
+//      int i = iy * step + ix;
+//      int i0 = i, i1 = i + 1, i2 = i + step, i3 = i2 + 1;
+//      _constraints.add(new DistanceConstraint(i3, i2, dw));
+//      _constraints.add(new DistanceConstraint(i2, i0, dh));
+//      _constraints.add(new DistanceConstraint(i0, i3, dr));
+//      _constraints.add(new DistanceConstraint(i3, i0, dr));
+//      _constraints.add(new DistanceConstraint(i0, i1, dw));
+//      _constraints.add(new DistanceConstraint(i1, i3, dh));      
+//    }
+//  }
+// 
 //  _particles.add(new Particle(tx, ty, 0, 0));
 //  _particles.add(new Particle(tx + w, ty, 0, 0));
 //  _particles.add(new Particle(tx, ty + h, 0, 0));
@@ -538,7 +623,7 @@ void mouseDragged() {
 //  int i = _particles.size() - 1;
 //  _particles.get(i).setPosition(mouseX, mouseY);
   float dx = mouseX - width / 2, dy = mouseY - height / 2;
-  _forces.get(0).set(dx * 0.5, dy * 0.5);
+  _forces.get(0).set(dx * 0.1, dy * 0.1);
 }
 
 void drawParticle(Particle p) {
