@@ -219,7 +219,7 @@ class BendConstraint extends Constraint {
     phi0 = _phi(p0, p1, p2, p3).phi;
     println("phi9=" + phi0);
   }
-  public float eval(int interations) {
+  public float eval(int iterations) {
     Point p0 = positions[0].p1;
     Point p1 = positions[1].p1;
     Point p2 = positions[2].p1;
@@ -376,6 +376,41 @@ class Bend2DConstraint extends Constraint {
   }  
 }
 
+// C(p) = |p-p0|
+class SpringConstraint extends Constraint {
+  public Point p0;
+  public SpringConstraint(int i, Point p0) {
+    super(i);
+    this.p0 = new Point(p0.x, p0.y);
+  }
+  public float eval(int iterations) {
+    Point p1 = positions[0].p1;
+    float d = p1.dist(p0);
+    float c = d;
+    
+    if(!isEquality && c >= 0) {
+      return c;
+    }
+    
+    float m1 = positions[0].mass;
+    float w1 = m1 > 0 ? 1.0 / m1 : 0;
+
+    if(w1 == 0) {
+      return c;
+    }
+    
+    PVector n = PVector.div(PVector.sub(p1, p0), d);
+    
+    Point dp1 = new Point(-(p1.x - p0.x), -(p1.y - p0.y));
+    
+    float dt = 1.0 / 30; // TODO
+    float t = _k(iterations) * dt;
+    p1.set(p1.x + t * dp1.x, p1.y + t * dp1.y);
+    
+    return c;
+  }
+}
+
 class RigidBody {
   
 }
@@ -397,6 +432,9 @@ ArrayList<RigidBody> _bodies;
 int _solverIterations = 4;
 int _updateIterations = 2;
 
+float _radius = 30;
+Point _dragOrigin;
+
 void setup() {
   size(500, 500);
   frameRate(30);
@@ -409,109 +447,63 @@ void setup() {
   
 //  Particle p = new Particle();
 //  p.setPosition(width / 2, height / 2);
-//  p.setVelocity(0, 13);
-//  p.mass = 0;
+////  p.setVelocity(0, 13);
+//  p.mass = 1;
 //  _particles.add(p);
 //  
 //  Particle p2 = new Particle();
-//  p2.setPosition(p.x() + 100, p.y());
-//  p2.setVelocity(0, 13);
+//  p2.setPosition(width * 3 / 4, height / 2);
+////  p2.setVelocity(0, 13);
 //  _particles.add(p2);
 //  
-//  DistanceConstraint dc = new DistanceConstraint(0, 1, 50);
-//  dc.k = 0.5f;
+//  float d = p.p0.dist(p2.p0);
+//  DistanceConstraint dc = new DistanceConstraint(0, 1, d);
+//  dc.k = 0.25f;
 //  _constraints.add(dc);
+//
+//  Point p01 = new Point(width / 2, height / 2);
+//  SpringConstraint sc = new SpringConstraint(0, p01);
+//  sc.k = 1.0f;
+//  _constraints.add(sc);
 //  
-//  _forces.add(new Point(10, 0));
+//  Point p02 = new Point(width * 3 / 4, height * 3 / 4);
+//  SpringConstraint sc2 = new SpringConstraint(1, p02);
+//  sc2.k = 0.5f;
+//  _constraints.add(sc2);
 
-  float radius = 100;
-  int seg = 10;
-  float tx = width / 2, ty = height / 2; 
-  for(int i = 0; i < seg; ++ i) {
-    float a = 2 * PI * i / (float) seg;
-    float x = tx + cos(a) * radius;
-    float y = ty + sin(a) * radius;
-    Particle p = new Particle(x, y, 0, 0);
-    p.mass = 1.0f;
-    _particles.add(p);
-  } 
+  _particles.add(new Particle(width / 2 - 150, height / 2));
+  _particles.add(new Particle(width / 2 - 100, height / 2));
+  _particles.add(new Particle(width / 2 - 50, height / 2));
+  _particles.add(new Particle(width / 2, height / 2));
   
-  int[] indices = new int[seg];
-  Particle[] particles = new Particle[seg];
-  float dr = 2 * PI * radius / (float) seg;
-  for(int i = 0, j = seg - 1; i < seg; ++ i) {
-    // distance
-    _constraints.add(new DistanceConstraint(j, i, dr));
-    j = i;
-    // pressure
-    indices[i] = i;
-    particles[i] = _particles.get(i);
+  _particles.add(new Particle(width / 2, height / 2 + 50));
+  _particles.add(new Particle(width / 2 + 50, height / 2 + 50));
+  _particles.add(new Particle(width / 2 + 100, height / 2 + 50));
+  _particles.add(new Particle(width / 2 + 100, height / 2 + 100));
+  _particles.add(new Particle(width / 2 + 100, height / 2 + 150));
+  
+  _particles.add(new Particle(width / 2 + 50, height / 2 + 150));
+  _particles.add(new Particle(width / 2, height / 2 + 150));
+  _particles.add(new Particle(width / 2 - 50, height / 2 + 150));
+  _particles.add(new Particle(width / 2 - 100, height / 2 + 150));
+  _particles.add(new Particle(width / 2 - 150, height / 2 + 150));
+  
+  _particles.add(new Particle(width / 2 - 150, height / 2 + 100));
+  _particles.add(new Particle(width / 2 - 150, height / 2 + 50));
+  
+  for(int i = 0, len = _particles.size(); i < len; ++ i) {
+    Particle pa = _particles.get(i);
+    SpringConstraint sc = new SpringConstraint(i, pa.p0);
+    _constraints.add(sc);
+    //
+    int j = (i + 1) % len;
+    DistanceConstraint dc = new DistanceConstraint(i, j, 50);
+    _constraints.add(dc);
   }
+    
+  //_forces.add(new Point(10, 0));
   
-  for(int i = 0; i < seg; ++ i) {
-    int i0 = i, i1 = (i + 1) % seg, i2 = (i + 2) % seg;
-    _constraints.add(new Bend2DConstraint(i0, i1, i2,
-                                          _particles.get(i0),
-                                          _particles.get(i1),
-                                          _particles.get(i2)));
-  }
-  
-  Pressure2DConstraint pc = new Pressure2DConstraint(indices, particles);
-  pc.k = 1.0f;
-  pc.kp = 1.0f;
-  _constraints.add(pc);
-  
-//  _particles.get(seg*3/4).mass = 0;
-//  _particles.get(seg*1/4).mass = 0;
-//  _particles.get(seg*1/4-1).mass = 0;
-//  _particles.get(seg*1/4+1).mass = 0;
-//  for(int i = 0; i < seg/2; ++ i) {
-//    _particles.get(i).mass = 0;
-//  }
-
-//  int step = segX + 1;
-//  float dw = w / segX, dh = h / segY, dr = sqrt(dw * dw + dh * dh);
-//  for(int iy = 0; iy < segY; ++ iy) {  
-//    for(int ix = 0; ix < segX; ++ ix) {
-//      int i = iy * step + ix;
-//      int i0 = i, i1 = i + 1, i2 = i + step, i3 = i2 + 1;
-//      _constraints.add(new DistanceConstraint(i3, i2, dw));
-//      _constraints.add(new DistanceConstraint(i2, i0, dh));
-//      _constraints.add(new DistanceConstraint(i0, i3, dr));
-//      _constraints.add(new DistanceConstraint(i3, i0, dr));
-//      _constraints.add(new DistanceConstraint(i0, i1, dw));
-//      _constraints.add(new DistanceConstraint(i1, i3, dh));      
-//    }
-//  }
-// 
-//  _particles.add(new Particle(tx, ty, 0, 0));
-//  _particles.add(new Particle(tx + w, ty, 0, 0));
-//  _particles.add(new Particle(tx, ty + h, 0, 0));
-//  _particles.add(new Particle(tx + w, ty + h, 0, 0));
-//  
-//  _particles.get(0).mass = _particles.get(1).mass = 0;
-//   
-//  float t = sqrt(w * w + h * h);
-//  _constraints.add(new DistanceConstraint(3, 2, w));
-//  _constraints.add(new DistanceConstraint(2, 0, h));
-//  _constraints.add(new DistanceConstraint(0, 3, t));
-//  _constraints.add(new DistanceConstraint(3, 0, t));
-//  _constraints.add(new DistanceConstraint(0, 1, w));
-//  _constraints.add(new DistanceConstraint(1, 3, h));
-  
-//  _constraints.add(new BendConstraint(3, 0, 2, 1,
-//                                      _particles.get(3),
-//                                      _particles.get(0),
-//                                      _particles.get(2),
-//                                      _particles.get(1)));
-  
-  for(int i = 0, len = _constraints.size(); i < len; ++ i) {
-    Constraint c = _constraints.get(i);
-    c.k = 1.0f;
-    c.isEquality = true;
-  }
-  
-//  _forces.add(new Point(0, 10));
+  _dragOrigin = new Point();
 }
 
 void draw() {
@@ -540,6 +532,15 @@ void draw() {
       line(p0.x(), p0.y(), p1.x(), p1.y());
     }
   }
+  
+  // finger
+  if(mousePressed) {
+    fill(255,255,255,64);
+  } else {
+    noFill();
+  }
+  stroke(255,255,255,128);
+  ellipse(mouseX, mouseY, 2 * _radius, 2 * _radius);
   
   fill(255);
   stroke(255);
@@ -660,13 +661,50 @@ void projectConstraints(ArrayList<Constraint> constraints, ArrayList<Particle> p
 
 void mousePressed() {
   _isPaused = false;
+//  Particle pa = _particles.get(0);
+//  pa.mass = 0;
+//  pa.setPosition(mouseX, mouseY);
+
+  _dragOrigin.set(mouseX, mouseY);
 }
 
 void mouseDragged() {
 //  int i = _particles.size() - 1;
 //  _particles.get(i).setPosition(mouseX, mouseY);
-  float dx = mouseX - width / 2, dy = mouseY - height / 2;
-  _forces.get(0).set(dx * 0.1, dy * 0.1);
+//  float dx = mouseX - width / 2, dy = mouseY - height / 2;
+//  _forces.get(0).set(dx * 0.1, dy * 0.1);
+
+//  Particle pa = _particles.get(0);
+//  pa.setPosition(mouseX, mouseY);
+
+  Point p0 = new Point(mouseX, mouseY);
+  PVector f = PVector.sub(p0, _dragOrigin);
+  f.normalize(); 
+  
+  for(int i = 0, len = _particles.size(); i < len; ++ i) {
+    Particle pa = _particles.get(i);
+    float d = pa.p0.dist(p0);
+    if(d > _radius) {
+      continue;
+    }
+    PVector n = PVector.div(PVector.sub(pa.p0, p0), d);
+    float v = _radius - d;
+    pa.setPosition(pa.p0.x + f.x * n.x * v, pa.p0.y + f.y * n.y * v);
+    pa.mass = 0; 
+  }
+  
+  _dragOrigin.set(p0);
+}
+
+void mouseReleased() {
+//  Particle pa = _particles.get(0);
+//  pa.mass = 1.0f;
+
+  for(int i = 0, len = _particles.size(); i < len; ++ i) {
+    if(_particles.get(i).mass == 0) {
+      _particles.get(i).mass = 1;
+    }
+  }
 }
 
 void drawParticle(Particle p) {
