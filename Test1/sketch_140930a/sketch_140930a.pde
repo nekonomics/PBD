@@ -159,20 +159,22 @@ class DistanceConstraint extends Constraint {
 
 // C(p) = dot((p - q), n)
 class CollisionConstraint extends Constraint {
-  Point query;
-  Point normal;
-  public CollisionConstraint(int i, Point query, Point normal) {
+  public Point q; // query
+  public Point n; // normal
+  public boolean isStatic;
+  public CollisionConstraint(int i, Point q, Point n, boolean isStatic) {
     super(i);
-    this.query = query;
-    this.normal = normal;
+    this.q = new Point(q.x, q.y);
+    this.n = new Point(n.x, n.y);
+    this.isStatic = isStatic;
+    this.isEquality = false;
   }
   public float eval(int iterations) {
     Point p = positions[0].p1;
-    Point q = query;
     Point qp = new Point(p.x - q.x, p.y - q.y);
     
     // C(p) = dot((p-q), n)
-    float c = PVector.dot(qp, normal);
+    float c = PVector.dot(qp, n);
     
     if(!isEquality && c >= 1.0f) {
       return c;
@@ -411,15 +413,100 @@ class SpringConstraint extends Constraint {
   }
 }
 
-class RigidBody {
-  
+class RigidBody { 
+  public boolean inside(Point p) {
+    return false;
+  }
+  public Point normal(Point p) {
+    return null;
+  } 
+  public Point closestPoint(Point p) {
+    return null;
+  }
+  public Point intersection(Point p0, Point p1) {
+    return null;
+  }
 }
 
 class BoxBody extends RigidBody {
   public Rectangle bounds;
   public BoxBody(float x, float y, float width, float height) {
     bounds = new Rectangle(x, y, width, height);
+  } 
+}
+
+class CircleBody extends RigidBody {
+  public Point center;
+  public float radius;
+  public CircleBody(float x, float y, float radius) {
+    this.center = new Point(x, y);
+    this.radius = radius;
   }
+  public boolean inside(Point p) {
+    float dx = p.x - center.x;
+    float dy = p.y - center.y;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+  public Point normal(Point p) {
+    float dx = p.x - center.x;
+    float dy = p.y - center.y;
+    float d = sqrt(dx * dx + dy * dy);
+    return d == 0 ? new Point(1, 0) : new Point(dx / d, dy / d);
+  }
+  public Point closestPoint(Point p) {
+    Point n = normal(p);    
+    return new Point(center.x + n.x * radius, center.y + n.y * radius);
+  }
+  public Point intersection(Point p0, Point p1) {
+    float vx0 = p1.x - p0.x, vy0 = p1.y - p0.y;    
+    if(vx0 == 0 && vy0 == 0) {
+      return null;
+    }
+    
+//    println("v", vx0, vy0);
+    
+    float vx1 = center.x - p0.x, vy1 = center.y - p0.y;
+    float d0 = sqrt(vx0 * vx0 + vy0 * vy0);
+    float cross = (vx0 * vy1 - vy0 * vx1) / d0;
+    float h = abs(cross);
+    
+    if(h > radius) {
+      return null;
+    }
+    
+    float vx2 = center.x - p1.x, vy2 = center.y - p1.y;
+    float dot = (vx0 * vx1 + vy0 * vy1) * ((-vx0) * vx2 + (-vy0) * vy2);
+    if(dot < 0 && !inside(p0) && !inside(p1)) {
+      return null;
+    }
+    
+//    println("vx", vx1, vy1, d0);
+//    println(cross, h);
+    
+    float nx = -vy0 / d0, ny = vx0 / d0;
+    int sign = cross < 0 ? 1 : -1;
+    float hx = center.x + sign * h * nx;
+    float hy = center.y + sign * h * ny;
+    
+//    println("n", nx, ny, sign, hx, hy);
+    
+    float d = sqrt(radius * radius - h * h);
+    float tx = vx0 / d0, ty = vy0 / d0;
+    float x = hx - tx * d;
+    float y = hy - ty * d;
+    
+    if(pow(p1.x - x, 2) + pow(p1.y - y, 2) > d0 * d0) {
+      x = hx + tx * d;
+      y = hy + ty * d;
+    }
+    
+//    println("a", d, tx, ty, x, y);
+    
+    return new Point(x, y);
+  }
+  public void move(float x, float y) {
+    center.set(x, y);
+  }  
 }
 
 float _lastUpdateTime;
@@ -435,6 +522,9 @@ int _updateIterations = 2;
 float _radius = 30;
 Point _dragOrigin;
 
+CircleBody _circle;
+Point _crossed = new Point();
+
 void setup() {
   size(500, 500);
   frameRate(30);
@@ -444,6 +534,7 @@ void setup() {
   _particles = new ArrayList<Particle>();
   _forces = new ArrayList<Point>();
   _constraints = new ArrayList<Constraint>();
+  _bodies = new ArrayList<RigidBody>();
   
 //  Particle p = new Particle();
 //  p.setPosition(width / 2, height / 2);
@@ -504,6 +595,9 @@ void setup() {
   //_forces.add(new Point(10, 0));
   
   _dragOrigin = new Point();
+  
+  _circle = new CircleBody(width / 2, height / 2, 30);
+  _bodies.add(_circle);
 }
 
 void draw() {
@@ -534,13 +628,37 @@ void draw() {
   }
   
   // finger
-  if(mousePressed) {
-    fill(255,255,255,64);
-  } else {
-    noFill();
+//  if(mousePressed) {
+//    fill(255,255,255,64);
+//  } else {
+//    noFill();
+//  }
+//  stroke(255,255,255,128);
+//  ellipse(mouseX, mouseY, 2 * _radius, 2 * _radius);
+
+  fill(255,255,255,64);
+  stroke(255);
+  for(int i = 0, len = _bodies.size(); i < len; ++ i) {
+    RigidBody b = _bodies.get(i);
+    if(b instanceof CircleBody) {
+      CircleBody c = (CircleBody) b;
+      float r = 2 * c.radius;
+      ellipse(c.center.x, c.center.y, r, r);
+    }
   }
-  stroke(255,255,255,128);
-  ellipse(mouseX, mouseY, 2 * _radius, 2 * _radius);
+  
+  fill(255,0,255);
+  noStroke();
+  ellipse(100, 100, 4, 4);
+  ellipse(200, 100, 4, 4);
+  noFill();
+  stroke(255,0, 255);
+  line(100, 100, 200, 100);
+  if(_crossed != null) {
+  fill(255,255,0);
+  noStroke();
+  ellipse(_crossed.x, _crossed.y, 8, 8);
+  }
   
   fill(255);
   stroke(255);
@@ -587,7 +705,7 @@ void updateParticles(ArrayList<Particle> particles, Point force, float dt) {
   // dampVelocities(v1 , . . . , vN )
 
   // forall vertices i do pi ← xi + ∆t vi
-  Point[] ps = new Point[particles.size()];
+//  Point[] ps = new Point[particles.size()];
   for(int i = 0; i < particles.size(); ++ i) {
     Particle p = particles.get(i);
     if(p.mass > 0) {
@@ -599,13 +717,14 @@ void updateParticles(ArrayList<Particle> particles, Point force, float dt) {
     }
   }
   // forall vertices i do generateCollisionConstraints(xi → pi)
-  generateCollisionConstraints(particles, ps);
+  ArrayList<Constraint> constraints = generateCollisionConstraints(particles);//, ps);
   
   // loop solverIterations times
   //   projectConstraints(C1,...,CM+Mcoll ,p1,...,pN)
   // endloop
   for(int i = 0; i < _solverIterations; ++ i) {
     projectConstraints(_constraints, _particles);
+    projectConstraints(constraints, _particles);
   }
   
   // forall vertices i
@@ -625,8 +744,39 @@ void updateParticles(ArrayList<Particle> particles, Point force, float dt) {
   
 }
 
-ArrayList<Constraint> generateCollisionConstraints(ArrayList<Particle> xs, Point[] ps) {
-  return null;
+ArrayList<Constraint> generateCollisionConstraints(ArrayList<Particle> particles) {//, Point[] ps) {
+  ArrayList<Constraint> res = new ArrayList<Constraint>();
+  
+  for(int i = 0, len = particles.size(); i < len; ++ i) {
+    Particle pa = particles.get(i);
+    Point p0 = pa.p0, p1 = pa.p1;
+    for(int j = 0, len2 = _bodies.size(); j < len2; ++ j) {
+      RigidBody b = _bodies.get(j);
+      Point q = null;
+      boolean s = b.inside(p0); // is static
+      if(b.inside(p1)) {
+        if(s) {
+          q = b.closestPoint(p1);
+        } else {
+          q = b.intersection(p0, p1);
+        } 
+      } else {
+        if(!s) {
+          q = b.intersection(p0, p1);
+        }
+      }
+      
+      if(q == null) {
+        continue;
+      }
+      
+      Point n = b.normal(q);
+      CollisionConstraint cc = new CollisionConstraint(i, q, n, s);
+      res.add(cc);
+    }
+  }
+  
+  return res;
 }
 
 void projectConstraints(ArrayList<Constraint> constraints, ArrayList<Particle> particles) {
@@ -678,19 +828,27 @@ void mouseDragged() {
 //  pa.setPosition(mouseX, mouseY);
 
   Point p0 = new Point(mouseX, mouseY);
-  PVector f = PVector.sub(p0, _dragOrigin);
-  f.normalize(); 
+//  PVector f = PVector.sub(p0, _dragOrigin);
+//  f.normalize(); 
+//  
+//  for(int i = 0, len = _particles.size(); i < len; ++ i) {
+//    Particle pa = _particles.get(i);
+//    float d = pa.p0.dist(p0);
+//    if(d > _radius) {
+//      continue;
+//    }
+//    PVector n = PVector.div(PVector.sub(pa.p0, p0), d);
+//    float v = _radius - d;
+//    pa.setPosition(pa.p0.x + f.x * n.x * v, pa.p0.y + f.y * n.y * v);
+//    pa.mass = 0; 
+//  }
+
+  _circle.move(p0.x, p0.y);
   
-  for(int i = 0, len = _particles.size(); i < len; ++ i) {
-    Particle pa = _particles.get(i);
-    float d = pa.p0.dist(p0);
-    if(d > _radius) {
-      continue;
-    }
-    PVector n = PVector.div(PVector.sub(pa.p0, p0), d);
-    float v = _radius - d;
-    pa.setPosition(pa.p0.x + f.x * n.x * v, pa.p0.y + f.y * n.y * v);
-    pa.mass = 0; 
+  Point p = _circle.intersection(new Point(100, 100), new Point(200, 100));
+  println(p);
+  if(p != null) {
+    println(p.x, p.y);
   }
   
   _dragOrigin.set(p0);
